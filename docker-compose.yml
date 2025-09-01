@@ -1,0 +1,139 @@
+version: "3.8"
+
+services:
+  master-db:
+    image: postgres:17
+    ports:
+      - 5432:5432
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres-master-data:/var/lib/postgresql/data
+      - ./init-master.sql:/docker-entrypoint-initdb.d/01-init-master.sql
+      - ./pg_hba.conf:/docker-entrypoint-initdb.d/02-pg_hba.conf
+      - ./postgresql.conf:/docker-entrypoint-initdb.d/03-postgresql.conf
+      - ./setup-config.sh:/docker-entrypoint-initdb.d/04-setup-config.sh
+    networks:
+      - postgres-network
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'pg_isready -U postgres && psql -U postgres -c "SELECT count(*) FROM pg_tables WHERE tablename LIKE ''tbl_users_p%'';" | grep -q ''4''',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  replica-one:
+    image: postgres:17
+    ports:
+      - 5433:5432
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      PGPASSWORD: postgres # Change this to postgres password
+    volumes:
+      - postgres-replica-one-data:/var/lib/postgresql/data
+    depends_on:
+      master-db:
+        condition: service_healthy
+    restart: always
+    command: |
+      bash -c "
+      echo 'Waiting for master database to be fully initialized...'
+      until PGPASSWORD=postgres psql -h master-db -U postgres -c \"SELECT count(*) FROM pg_tables WHERE tablename LIKE 'tbl_users_p%';\" | grep -q '4'; do
+        echo 'Waiting for partitions to be created in master...'
+        sleep 5
+      done
+      echo 'Master partitions are ready. Setting up replica-one...'
+      if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+        echo 'Cleaning data directory...'
+        rm -rf /var/lib/postgresql/data/*
+        
+        echo 'Starting pg_basebackup...'
+        PGPASSWORD=replicator_password pg_basebackup -h master-db -D /var/lib/postgresql/data -U replicator -v -P
+        
+        # PostgreSQL 17 replication configuration
+        echo \"primary_conninfo = 'host=master-db port=5432 user=replicator password=replicator_password'\" >> /var/lib/postgresql/data/postgresql.auto.conf
+        echo \"hot_standby = on\" >> /var/lib/postgresql/data/postgresql.auto.conf
+        
+        # Create standby.signal file (replaces standby_mode = on)
+        touch /var/lib/postgresql/data/standby.signal
+        
+        # Fix directory permissions
+        chmod 700 /var/lib/postgresql/data
+        chown -R postgres:postgres /var/lib/postgresql/data
+      fi
+      exec gosu postgres postgres
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - postgres-network
+
+  replica-two:
+    image: postgres:17
+    ports:
+      - 5434:5432
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      PGPASSWORD: postgres # Change this to postgres password
+    volumes:
+      - postgres-replica-two-data:/var/lib/postgresql/data
+    depends_on:
+      master-db:
+        condition: service_healthy
+    restart: always
+    command: |
+      bash -c "
+      echo 'Waiting for master database to be fully initialized...'
+      until PGPASSWORD=postgres psql -h master-db -U postgres -c \"SELECT count(*) FROM pg_tables WHERE tablename LIKE 'tbl_users_p%';\" | grep -q '4'; do
+        echo 'Waiting for partitions to be created in master...'
+        sleep 5
+      done
+      echo 'Master partitions are ready. Setting up replica-two...'
+      if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
+        echo 'Cleaning data directory...'
+        rm -rf /var/lib/postgresql/data/*
+        
+        echo 'Starting pg_basebackup...'
+        PGPASSWORD=replicator_password pg_basebackup -h master-db -D /var/lib/postgresql/data -U replicator -v -P
+        
+        # PostgreSQL 17 replication configuration
+        echo \"primary_conninfo = 'host=master-db port=5432 user=replicator password=replicator_password'\" >> /var/lib/postgresql/data/postgresql.auto.conf
+        echo \"hot_standby = on\" >> /var/lib/postgresql/data/postgresql.auto.conf
+        
+        # Create standby.signal file (replaces standby_mode = on)
+        touch /var/lib/postgresql/data/standby.signal
+        
+        # Fix directory permissions
+        chmod 700 /var/lib/postgresql/data
+        chown -R postgres:postgres /var/lib/postgresql/data
+      fi
+      exec gosu postgres postgres
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - postgres-network
+
+volumes:
+  postgres-master-data:
+  postgres-replica-one-data:
+  postgres-replica-two-data:
+
+networks:
+  postgres-network:
+    driver: bridge
