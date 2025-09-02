@@ -1,0 +1,58 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # Prometheus ตัวเอง
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # ✨ Node Exporter (System Metrics)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 10s
+
+  # ✨ cAdvisor (Container Metrics)
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_interval: 10s
+
+  # PostgreSQL Master Database
+  - job_name: 'postgres-master'
+    static_configs:
+      - targets: ['postgres-exporter-master:9187']
+    scrape_interval: 10s
+    metrics_path: /metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'master-db'
+
+  # PostgreSQL Replica One
+  - job_name: 'postgres-replica-one'
+    static_configs:
+      - targets: ['postgres-exporter-replica-one:9187']
+    scrape_interval: 10s
+    metrics_path: /metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'replica-one'
+
+  # PostgreSQL Replica Two
+  - job_name: 'postgres-replica-two'
+    static_configs:
+      - targets: ['postgres-exporter-replica-two:9187']
+    scrape_interval: 10s
+    metrics_path: /metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'replica-two'

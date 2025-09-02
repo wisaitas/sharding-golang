@@ -1,0 +1,12 @@
+## Prometheus
+# ดูสถานะ PostgreSQL ทั้งหมด
+pg_up
+
+# ดูจำนวน connections
+pg_stat_database_numbackends
+
+# ดูขนาด database
+pg_database_size_bytes
+
+# Query Rate
+rate(pg_stat_database_xact_commit[5m]) + rate(pg_stat_database_xact_rollback[5m])

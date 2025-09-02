@@ -4,6 +4,11 @@ CREATE USER replicator REPLICATION LOGIN CONNECTION LIMIT 5 ENCRYPTED PASSWORD '
 -- Grant necessary permissions
 GRANT CONNECT ON DATABASE postgres TO replicator;
 
+-- ✨ เพิ่ม monitoring user สำหรับ postgres_exporter
+CREATE USER postgres_exporter PASSWORD 'postgres_exporter_password';
+GRANT CONNECT ON DATABASE postgres TO postgres_exporter;
+GRANT pg_monitor TO postgres_exporter;
+
 -- POC
 
 CREATE TABLE tbl_users (

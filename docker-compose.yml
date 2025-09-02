@@ -86,12 +86,14 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_USER: postgres
       POSTGRES_DB: postgres
-      PGPASSWORD: postgres # Change this to postgres password
+      PGPASSWORD: postgres
     volumes:
       - postgres-replica-two-data:/var/lib/postgresql/data
     depends_on:
       master-db:
         condition: service_healthy
+      replica-one:
+        condition: service_healthy # รอให้ replica-one พร้อมก่อน
     restart: always
     command: |
       bash -c "
@@ -100,6 +102,11 @@ services:
         echo 'Waiting for partitions to be created in master...'
         sleep 5
       done
+
+      # เพิ่มการรอเพิ่มเติม
+      echo 'Waiting additional time for replica-one to stabilize...'
+      sleep 10
+
       echo 'Master partitions are ready. Setting up replica-two...'
       if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
         echo 'Cleaning data directory...'
@@ -112,7 +119,7 @@ services:
         echo \"primary_conninfo = 'host=master-db port=5432 user=replicator password=replicator_password'\" >> /var/lib/postgresql/data/postgresql.auto.conf
         echo \"hot_standby = on\" >> /var/lib/postgresql/data/postgresql.auto.conf
         
-        # Create standby.signal file (replaces standby_mode = on)
+        # Create standby.signal file
         touch /var/lib/postgresql/data/standby.signal
         
         # Fix directory permissions
@@ -123,16 +130,138 @@ services:
       "
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
+      interval: 30s # เพิ่ม interval
+      timeout: 10s # เพิ่ม timeout
       retries: 5
+      start_period: 60s # เพิ่ม start_period
     networks:
       - postgres-network
+
+  # ✨ เพิ่ม Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - 9090:9090
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"
+      - "--web.enable-admin-api"
+    networks:
+      - postgres-network
+    restart: always
+
+  # ✨ เพิ่ม Grafana สำหรับ Dashboard
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - 3000:3000
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/etc/grafana/dashboards
+    networks:
+      - postgres-network
+    restart: always
+    depends_on:
+      - prometheus
+
+  # ✨ เพิ่ม Node Exporter สำหรับ system metrics (CPU, Memory, Disk)
+  node-exporter:
+    image: prom/node-exporter:latest
+    ports:
+      - 9100:9100
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    networks:
+      - postgres-network
+    restart: always
+
+  # ✨ เพิ่ม cAdvisor สำหรับ container metrics
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    ports:
+      - 8080:8080
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices:
+      - /dev/kmsg
+    networks:
+      - postgres-network
+    restart: always
+
+  # PostgreSQL Exporter สำหรับ Master DB (ไม่เปลี่ยน)
+  postgres-exporter-master:
+    image: prometheuscommunity/postgres-exporter:latest
+    ports:
+      - 9187:9187
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@master-db:5432/postgres?sslmode=disable"
+      # ปิด custom queries ก่อน
+      # PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres_exporter/queries.yaml"
+    # volumes:
+    #   - ./postgres-exporter-queries.yaml:/etc/postgres_exporter/queries.yaml
+    networks:
+      - postgres-network
+    depends_on:
+      master-db:
+        condition: service_healthy
+    restart: always
+
+  # ✨ PostgreSQL Exporter สำหรับ Replica One (แก้ไขแล้ว)
+  postgres-exporter-replica-one:
+    image: prometheuscommunity/postgres-exporter:latest
+    ports:
+      - 9188:9187
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@replica-one:5432/postgres?sslmode=disable"
+    networks:
+      - postgres-network
+    depends_on:
+      replica-one:
+        condition: service_healthy
+    restart: always
+
+  # ✨ PostgreSQL Exporter สำหรับ Replica Two (แก้ไขแล้ว)
+  postgres-exporter-replica-two:
+    image: prometheuscommunity/postgres-exporter:latest
+    ports:
+      - 9189:9187
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@replica-two:5432/postgres?sslmode=disable"
+    networks:
+      - postgres-network
+    depends_on:
+      replica-two:
+        condition: service_healthy
+    restart: always
 
 volumes:
   postgres-master-data:
   postgres-replica-one-data:
   postgres-replica-two-data:
+  # ✨ เพิ่ม volumes สำหรับ monitoring
+  prometheus-data:
+  grafana-data:
 
 networks:
   postgres-network:
